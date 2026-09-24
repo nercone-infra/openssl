@@ -11,7 +11,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: build-openssl
@@ -80,8 +80,54 @@ jobs:
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
-  build:
+  source:
     needs: check-version
+    if: needs.check-version.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.check-version.outputs.versions) }}
+    runs-on: ubuntu-24.04
+    env:
+      OPENSSL_VERSION: ${{ matrix.version }}
+      OPENSSL_SIGNERS: B146647E45A7B33947AB226B2A2C87D161692D40 BA5473A2B0587B07FB27CF2D216094DFD0CB81EF EFC0A467D613CB83C7ED6D30D894E2CE8B3D79F5
+    steps:
+      - name: Download OpenSSL
+        run: |
+          set -euo pipefail
+          URL="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}"
+          curl -fL -o "openssl-${OPENSSL_VERSION}.tar.gz" "${URL}/openssl-${OPENSSL_VERSION}.tar.gz"
+          curl -fL -o "openssl-${OPENSSL_VERSION}.tar.gz.asc" "${URL}/openssl-${OPENSSL_VERSION}.tar.gz.asc"
+          curl -fL -o pubkeys.asc "https://openssl-library.org/source/pubkeys.asc"
+
+      - name: Verify OpenSSL
+        run: |
+          set -euo pipefail
+          GNUPGHOME=$(mktemp -d)
+          export GNUPGHOME
+          gpg --batch --quiet --import pubkeys.asc
+          STATUS=$(gpg --batch --status-fd 1 --verify "openssl-${OPENSSL_VERSION}.tar.gz.asc" "openssl-${OPENSSL_VERSION}.tar.gz" 2> /dev/null || true)
+          if grep -qE '^\[GNUPG:\] (BADSIG|ERRSIG|REVKEYSIG) ' <<< "${STATUS}"; then
+            echo "Invalid signature: OpenSSL ${OPENSSL_VERSION}" >&2
+            exit 1
+          fi
+          SIGNER=$(awk '$2 == "VALIDSIG" { print $NF }' <<< "${STATUS}")
+          if [ -z "${SIGNER}" ] || ! grep -qxF "${SIGNER}" <(tr ' ' '\n' <<< "${OPENSSL_SIGNERS}"); then
+            echo "Untrusted signer: OpenSSL ${OPENSSL_VERSION} (${SIGNER:-none})" >&2
+            exit 1
+          fi
+          echo "Verified: OpenSSL ${OPENSSL_VERSION} signed by ${SIGNER}"
+
+      - name: Upload source
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: source-${{ matrix.version }}
+          path: openssl-${{ matrix.version }}.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
+  build:
+    needs: [check-version, source]
     if: needs.check-version.outputs.should_build == 'true'
     strategy:
       fail-fast: false
@@ -134,33 +180,34 @@ jobs:
     steps:
       - name: Setup MSVC (Windows)
         if: matrix.target.platform == 'windows'
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: ${{ matrix.target.msvc_arch }}
 
       - name: Setup NASM (Windows x86_64)
         if: matrix.target.id == 'windows-x86_64'
-        uses: ilammy/setup-nasm@v1
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
 
-      - name: Download OpenSSL (Linux/macOS)
+      - name: Download OpenSSL
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: source-${{ matrix.version }}
+
+      - name: Extract OpenSSL (Linux/macOS)
         if: matrix.target.platform != 'windows'
         shell: bash
         run: |
           set -euo pipefail
-          curl -fL -o openssl-src.tar.gz \
-            "https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}/openssl-${OPENSSL_VERSION}.tar.gz"
           mkdir src
-          tar -xzf openssl-src.tar.gz -C src --strip-components=1
+          tar -xzf "openssl-${OPENSSL_VERSION}.tar.gz" -C src --strip-components=1
 
-      - name: Download OpenSSL (Windows)
+      - name: Extract OpenSSL (Windows)
         if: matrix.target.platform == 'windows'
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $url = "https://github.com/openssl/openssl/releases/download/openssl-$env:OPENSSL_VERSION/openssl-$env:OPENSSL_VERSION.tar.gz"
-          Invoke-WebRequest -Uri $url -OutFile openssl-src.tar.gz
           New-Item -ItemType Directory -Path src | Out-Null
-          tar -xzf openssl-src.tar.gz -C src --strip-components=1
+          tar -xzf "openssl-$env:OPENSSL_VERSION.tar.gz" -C src --strip-components=1
 
       - name: Build OpenSSL (Linux/macOS)
         if: matrix.target.platform != 'windows'
@@ -256,7 +303,7 @@ jobs:
           7z a -t7z "dist/$name.7z" "$name" | Out-Null
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: openssl-${{ matrix.version }}-${{ matrix.target.id }}
           path: dist/*
@@ -266,6 +313,8 @@ jobs:
   release:
     needs: [check-version, build]
     if: needs.check-version.outputs.should_build == 'true'
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       max-parallel: 1
@@ -274,7 +323,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download artifacts for this version
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: openssl-${{ matrix.version }}-*
           path: dist
@@ -293,7 +342,7 @@ jobs:
         run: ls -la dist
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: openssl-${{ matrix.version }}
           name: OpenSSL ${{ matrix.version }}
