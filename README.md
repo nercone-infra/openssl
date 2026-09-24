@@ -1,8 +1,8 @@
-# nercone-rear/openssl
+# nercone-infra/openssl
 
 Pre-built OpenSSL binaries, built and published automatically via GitHub Actions.
 
-This repository does not contain OpenSSL source code. It periodically checks the [official OpenSSL releases](https://github.com/openssl/openssl/releases) for new stable versions, builds them for multiple platforms/architectures, and publishes the results as [GitHub Releases](https://github.com/nercone-rear/openssl/releases).
+This repository does not contain OpenSSL source code. It periodically checks the [official OpenSSL releases](https://github.com/openssl/openssl/releases) for new stable versions, builds them for multiple platforms/architectures, and publishes the results as [GitHub Releases](https://github.com/nercone-infra/openssl/releases).
 
 ## Platforms
 
@@ -27,7 +27,7 @@ The build workflow ([`.github/workflows/build.yml`](.github/workflows/build.yml)
 
 ## Usage
 
-Download the archive matching your platform and architecture from the [Releases page](https://github.com/nercone-rear/openssl/releases), extract it, and use the `openssl` binary under `bin/`.
+Download the archive matching your platform and architecture from the [Releases page](https://github.com/nercone-infra/openssl/releases), extract it, and use the `openssl` binary under `bin/`.
 
 To verify an archive, download the corresponding `SHA256SUMS`, `SHA384SUMS`, or `SHA512SUMS` file from the same release and check it, e.g. `sha256sum -c SHA256SUMS --ignore-missing`.
 
