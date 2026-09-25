@@ -358,6 +358,6 @@ jobs:
 
             SHA-256/384/512 checksums for all assets are provided in `SHA256SUMS`, `SHA384SUMS`, and `SHA512SUMS`.
 
-            *Built automatically using GitHub Actions. The workflow source code is available [here](https://github.com/nercone-rear/openssl/blob/main/.github/workflows/build.yml).*
+            *Built automatically using GitHub Actions. The workflow source code is available [here](https://github.com/nercone-infra/openssl/blob/main/.github/workflows/build.yml).*
           files: dist/*
           fail_on_unmatched_files: true

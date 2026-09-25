@@ -19,7 +19,7 @@ Each release also includes `SHA256SUMS`, `SHA384SUMS`, and `SHA512SUMS` files wi
 The build workflow ([`.github/workflows/build.yml`](.github/workflows/build.yml)):
 
 1. Runs on a schedule (every 6 hours) or on manual dispatch.
-2. Determines which OpenSSL versions need to be built — the 5 most recent stable releases from `openssl/openssl` that don't already have a corresponding release in this repository, or a specific version if provided manually.
+2. Determines which OpenSSL versions need to be built — the 10 most recent stable releases from `openssl/openssl` that don't already have a corresponding release in this repository, or a specific version if provided manually.
 3. Builds each version for every target platform/architecture using OpenSSL's own `Configure` + `make`/`nmake` build system (`no-tests`).
 4. Verifies the resulting `openssl` binary runs and reports its version.
 5. Packages the install output into `.zip`, `.tar.gz`, `.tar.xz`, and `.7z` archives.
