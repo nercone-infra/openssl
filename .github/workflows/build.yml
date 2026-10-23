@@ -37,11 +37,11 @@ jobs:
             VERSIONS_JSON=$(jq -cn --arg v "${MANUAL_VERSION}" '[$v]')
             echo "Manually Specified: OpenSSL ${MANUAL_VERSION}"
           else
-            mapfile -t CANDIDATES < <(gh api repos/openssl/openssl/releases --paginate \
-              --jq '[.[] | select(.draft == false and .prerelease == false) |
-                     select(.tag_name | test("^openssl-[0-9]+\\.[0-9]+\\.[0-9]+$")) |
-                     (.tag_name | sub("^openssl-";""))
-                    ] | .[0:10][]')
+            RELEASES=$(gh api repos/openssl/openssl/releases --paginate \
+              --jq '.[] | select(.draft == false and .prerelease == false) |
+                    select(.tag_name | test("^openssl-[0-9]+\\.[0-9]+\\.[0-9]+$")) |
+                    {version: (.tag_name | sub("^openssl-";"")), published_at}')
+            mapfile -t CANDIDATES < <(jq -rs 'sort_by(.published_at) | reverse | .[0:10][].version' <<< "${RELEASES}")
 
             if [ "${#CANDIDATES[@]}" -eq 0 ]; then
               echo "Failed to retrieve OpenSSL releases" >&2
