@@ -44,4 +44,5 @@ runs:
         echo "LD_LIBRARY_PATH=$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
         echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
         echo "libdir=$libdir" >> "$GITHUB_OUTPUT"
-        "$prefix/bin/openssl" version
+        # GITHUB_ENV applies only to later steps, so pass the library path here explicitly.
+        LD_LIBRARY_PATH="$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "$prefix/bin/openssl" version
