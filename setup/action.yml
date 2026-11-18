@@ -1,0 +1,47 @@
+name: Set up OpenSSL
+description: >
+  Installs a Linux build from this repository's Releases (verified against
+  SHA384SUMS), puts bin/ first on PATH and the libraries on LD_LIBRARY_PATH,
+  and outputs the install prefix for builds that link against it.
+inputs:
+  version:
+    description: OpenSSL version, e.g. 4.1.0
+    required: true
+  token:
+    description: Token used to download release assets
+    default: ${{ github.token }}
+outputs:
+  prefix:
+    description: Install prefix (bin/, include/, lib/)
+    value: ${{ steps.install.outputs.prefix }}
+  libdir:
+    description: Library directory (lib64/ on x86_64, lib/ on aarch64)
+    value: ${{ steps.install.outputs.libdir }}
+runs:
+  using: composite
+  steps:
+    - id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        case "$(uname -s)-$(uname -m)" in
+          Linux-x86_64) arch=x86_64 ;;
+          Linux-aarch64|Linux-arm64) arch=aarch64 ;;
+          *) echo "unsupported runner: $(uname -s) $(uname -m)" >&2; exit 1 ;;
+        esac
+        name="openssl-${VERSION}-linux-${arch}"
+        work="${RUNNER_TEMP}/openssl"
+        mkdir -p "$work"
+        gh release download "openssl-${VERSION}" -R nercone-infra/openssl -D "$work" -p "${name}.tar.gz" -p SHA384SUMS --clobber
+        (cd "$work" && grep " ${name}.tar.gz\$" SHA384SUMS | sha384sum -c -)
+        tar -xzf "$work/${name}.tar.gz" -C "$work"
+        prefix="$work/${name}"
+        libdir="$prefix/lib64"; [ -d "$libdir" ] || libdir="$prefix/lib"
+        echo "$prefix/bin" >> "$GITHUB_PATH"
+        echo "LD_LIBRARY_PATH=$libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        echo "libdir=$libdir" >> "$GITHUB_OUTPUT"
+        "$prefix/bin/openssl" version

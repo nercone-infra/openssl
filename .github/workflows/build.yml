@@ -1,3 +1,7 @@
+# OpenSSL の新しい安定版を Linux・macOS・Windows(x86_64、AArch64)向けにビルドし、
+# GitHub Release として公開する。続けて image.yml で Linux ビルドのイメージを公開する。
+#   - スケジュール実行: openssl/openssl の安定版のうち最新の10件から、まだリリースがないものをビルドする。
+#   - 手動実行: version に指定したバージョンをビルドする。
 name: Build and Release OpenSSL
 
 on:
@@ -92,7 +96,7 @@ jobs:
       OPENSSL_VERSION: ${{ matrix.version }}
       OPENSSL_SIGNERS: B146647E45A7B33947AB226B2A2C87D161692D40 BA5473A2B0587B07FB27CF2D216094DFD0CB81EF EFC0A467D613CB83C7ED6D30D894E2CE8B3D79F5
     steps:
-      - name: Download OpenSSL
+      - name: Download source, signature and public keys
         run: |
           set -euo pipefail
           URL="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}"
@@ -100,7 +104,8 @@ jobs:
           curl -fL -o "openssl-${OPENSSL_VERSION}.tar.gz.asc" "${URL}/openssl-${OPENSSL_VERSION}.tar.gz.asc"
           curl -fL -o pubkeys.asc "https://openssl-library.org/source/pubkeys.asc"
 
-      - name: Verify OpenSSL
+      # pubkeys.asc の鍵で署名を検証し、さらに署名した鍵が OPENSSL_SIGNERS のいずれかであることを確認する。
+      - name: Verify source signature
         run: |
           set -euo pipefail
           GNUPGHOME=$(mktemp -d)
@@ -178,22 +183,22 @@ jobs:
       DIST_NAME: openssl-${{ matrix.version }}-${{ matrix.target.platform }}-${{ matrix.target.arch }}
 
     steps:
-      - name: Setup MSVC (Windows)
+      - name: Set up MSVC (Windows)
         if: matrix.target.platform == 'windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: ${{ matrix.target.msvc_arch }}
 
-      - name: Setup NASM (Windows x86_64)
+      - name: Set up NASM (Windows x86_64)
         if: matrix.target.id == 'windows-x86_64'
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
 
-      - name: Download OpenSSL
+      - name: Download verified source
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: source-${{ matrix.version }}
 
-      - name: Extract OpenSSL (Linux/macOS)
+      - name: Extract source (Linux/macOS)
         if: matrix.target.platform != 'windows'
         shell: bash
         run: |
@@ -201,7 +206,7 @@ jobs:
           mkdir src
           tar -xzf "openssl-${OPENSSL_VERSION}.tar.gz" -C src --strip-components=1
 
-      - name: Extract OpenSSL (Windows)
+      - name: Extract source (Windows)
         if: matrix.target.platform == 'windows'
         shell: pwsh
         run: |
@@ -252,7 +257,7 @@ jobs:
           nmake install_sw install_ssldirs
           if ($LASTEXITCODE -ne 0) { throw "nmake install_sw failed" }
 
-      - name: Check (Linux/macOS)
+      - name: Run openssl version (Linux/macOS)
         if: matrix.target.platform != 'windows'
         shell: bash
         run: |
@@ -262,7 +267,7 @@ jobs:
           export DYLD_LIBRARY_PATH="${INSTALL_DIR}/lib64:${INSTALL_DIR}/lib:${DYLD_LIBRARY_PATH:-}"
           "${INSTALL_DIR}/bin/openssl" version
 
-      - name: Check (Windows)
+      - name: Run openssl version (Windows)
         if: matrix.target.platform == 'windows'
         shell: pwsh
         run: |
@@ -310,6 +315,8 @@ jobs:
           retention-days: 1
           if-no-files-found: error
 
+  # 古いバージョンから1つずつ作成する。最後に作成したリリースが GitHub の Latest になるため、
+  # 一度に複数のバージョンを公開しても、最も新しいバージョンが Latest になる。
   release:
     needs: [check-version, build]
     if: needs.check-version.outputs.should_build == 'true'
@@ -361,3 +368,18 @@ jobs:
             *Built automatically using GitHub Actions. The workflow source code is available [here](https://github.com/nercone-infra/openssl/blob/main/.github/workflows/build.yml).*
           files: dist/*
           fail_on_unmatched_files: true
+
+  image:
+    needs: [check-version, release]
+    if: needs.check-version.outputs.should_build == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJson(needs.check-version.outputs.versions_asc) }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    uses: ./.github/workflows/image.yml
+    with:
+      version: ${{ matrix.version }}
