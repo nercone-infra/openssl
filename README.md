@@ -52,7 +52,7 @@ cosign verify \
 
 ### GitHub Actions
 
-[`setup/action.yml`](setup/action.yml) は Linux ビルドをランナーにインストールします(`SHA384SUMS` と照合)。`bin/` を `PATH` の先頭に、ライブラリを `LD_LIBRARY_PATH` に追加します。
+[`setup/action.yml`](setup/action.yml) は Linux ビルドをランナーにインストールします(`SHA384SUMS` と照合)。`bin/` を `PATH` の先頭に、ライブラリを `LD_LIBRARY_PATH` に追加します。ビルド時の `OPENSSLDIR` と `MODULESDIR` はビルドマシン上のパスを指すため、インストールした設定ファイルとモジュールを `OPENSSL_CONF` と `OPENSSL_MODULES` で指定します。
 
 ```yaml
 - id: openssl
