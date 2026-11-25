@@ -1,0 +1,161 @@
+name: Setup OpenSSL
+description: Install a pre-built OpenSSL from nercone-infra/openssl releases and add it to PATH.
+
+inputs:
+  version:
+    description: 'OpenSSL version to install: "latest", a prefix such as "3" or "3.5" (highest matching version), or an exact "x.y.z".'
+    required: false
+    default: latest
+  path:
+    description: 'Directory to install OpenSSL into. Defaults to a directory under RUNNER_TEMP.'
+    required: false
+    default: ''
+  repository:
+    description: 'Repository that publishes the pre-built OpenSSL releases.'
+    required: false
+    default: nercone-infra/openssl
+  github-token:
+    description: 'Token used to read the releases of the repository.'
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  version:
+    description: The installed OpenSSL version (x.y.z).
+    value: ${{ steps.install.outputs.version }}
+  root:
+    description: The installation root (contains bin, lib, include, ssl).
+    value: ${{ steps.install.outputs.root }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install OpenSSL
+      id: install
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_REPOSITORY: ${{ inputs.repository }}
+      run: |
+        set -euo pipefail
+
+        case "${RUNNER_OS}" in
+          Linux)   PLATFORM=linux ;;
+          macOS)   PLATFORM=darwin ;;
+          Windows) PLATFORM=windows ;;
+          *) echo "Unsupported OS: ${RUNNER_OS}" >&2; exit 1 ;;
+        esac
+        case "${RUNNER_ARCH}" in
+          X64)   ARCH=x86_64 ;;
+          ARM64) ARCH=aarch64 ;;
+          *) echo "Unsupported architecture: ${RUNNER_ARCH}" >&2; exit 1 ;;
+        esac
+
+        # Resolve the requested version to the highest matching release.
+        if [ "${INPUT_VERSION}" = "latest" ]; then
+          PREFIX=""
+        elif [[ "${INPUT_VERSION}" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+          PREFIX="${INPUT_VERSION}"
+        else
+          echo "Invalid version: ${INPUT_VERSION}" >&2
+          exit 1
+        fi
+
+        VERSION=$(gh api "repos/${INPUT_REPOSITORY}/releases" --paginate \
+          --jq '.[] | select(.draft == false) | .tag_name | select(test("^openssl-[0-9]+\\.[0-9]+\\.[0-9]+$")) | sub("^openssl-";"")' \
+          | PREFIX="${PREFIX}" jq -Rrs '
+              split("\n") | map(select(length > 0))
+              | map(select(. == env.PREFIX or (. | startswith(env.PREFIX + ".")) or env.PREFIX == ""))
+              | sort_by(split(".") | map(tonumber)) | last // empty')
+        if [ -z "${VERSION}" ]; then
+          echo "No release of ${INPUT_REPOSITORY} matches version: ${INPUT_VERSION}" >&2
+          exit 1
+        fi
+        echo "Resolved: OpenSSL ${VERSION}"
+
+        DIST_NAME="openssl-${VERSION}-${PLATFORM}-${ARCH}"
+        ARCHIVE="${DIST_NAME}.tar.gz"
+        TAG="openssl-${VERSION}"
+
+        WORK=$(mktemp -d)
+        gh release download "${TAG}" --repo "${INPUT_REPOSITORY}" --dir "${WORK}" \
+          --pattern "${ARCHIVE}" --pattern SHA256SUMS
+
+        # Verify the archive against the published checksums.
+        EXPECTED=$(awk -v f="${ARCHIVE}" '$2 == f { print $1 }' "${WORK}/SHA256SUMS")
+        if [ -z "${EXPECTED}" ]; then
+          echo "No checksum for ${ARCHIVE} in SHA256SUMS" >&2
+          exit 1
+        fi
+        if command -v sha256sum >/dev/null 2>&1; then
+          ACTUAL=$(sha256sum "${WORK}/${ARCHIVE}" | awk '{ print $1 }')
+        else
+          ACTUAL=$(shasum -a 256 "${WORK}/${ARCHIVE}" | awk '{ print $1 }')
+        fi
+        if [ "${EXPECTED}" != "${ACTUAL}" ]; then
+          echo "Checksum mismatch: ${ARCHIVE}" >&2
+          exit 1
+        fi
+
+        DEST="${INPUT_PATH:-${RUNNER_TEMP}/openssl-${VERSION}}"
+        mkdir -p "${DEST}"
+        DEST=$(cd "${DEST}" && pwd)
+        if [ -n "$(ls -A "${DEST}")" ]; then
+          echo "Install directory is not empty: ${DEST}" >&2
+          exit 1
+        fi
+        (cd "${WORK}" && tar -xzf "${ARCHIVE}")
+        cp -R "${WORK}/${DIST_NAME}/." "${DEST}/"
+        rm -rf "${WORK}"
+
+        MODULES=""
+        for d in "${DEST}/lib64/ossl-modules" "${DEST}/lib/ossl-modules"; do
+          if [ -d "${d}" ]; then MODULES="${d}"; break; fi
+        done
+
+        if [ "${PLATFORM}" = "windows" ]; then
+          # DLLs sit next to openssl.exe, so bin on PATH is enough.
+          BIN_DIR="${DEST}/bin"
+        else
+          # The binaries have no rpath, so a wrapper sets the library path for
+          # openssl only. A global LD_LIBRARY_PATH would leak into every other
+          # program of the job and could make them load this libssl.
+          BIN_DIR="${DEST}/wrapper"
+          mkdir -p "${BIN_DIR}"
+          {
+            echo '#!/bin/sh'
+            echo "ROOT='${DEST}'"
+            echo 'LD_LIBRARY_PATH="${ROOT}/lib64:${ROOT}/lib${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"'
+            echo 'DYLD_LIBRARY_PATH="${ROOT}/lib64:${ROOT}/lib${DYLD_LIBRARY_PATH:+:${DYLD_LIBRARY_PATH}}"'
+            echo 'export LD_LIBRARY_PATH DYLD_LIBRARY_PATH'
+            echo 'exec "${ROOT}/bin/openssl" "$@"'
+          } > "${BIN_DIR}/openssl"
+          chmod +x "${BIN_DIR}/openssl"
+        fi
+
+        # The configuration and modules were baked in at the build path; point
+        # OpenSSL at the relocated copies.
+        if [ "${PLATFORM}" = "windows" ]; then
+          native() { cygpath -w "$1"; }
+        else
+          native() { printf '%s' "$1"; }
+        fi
+
+        native "${BIN_DIR}" >> "${GITHUB_PATH}"
+        {
+          echo "OPENSSL_DIR=$(native "${DEST}")"
+          echo "OPENSSL_ROOT_DIR=$(native "${DEST}")"
+          echo "OPENSSL_CONF=$(native "${DEST}/ssl/openssl.cnf")"
+          if [ -n "${MODULES}" ]; then
+            echo "OPENSSL_MODULES=$(native "${MODULES}")"
+          fi
+        } >> "${GITHUB_ENV}"
+
+        {
+          echo "version=${VERSION}"
+          echo "root=$(native "${DEST}")"
+        } >> "${GITHUB_OUTPUT}"
+
+        "${BIN_DIR}/openssl" version
