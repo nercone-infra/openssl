@@ -1,86 +1,37 @@
 # nercone-infra/openssl
 
-[OpenSSL の公式リリース](https://github.com/openssl/openssl/releases)を GitHub Actions でビルドし、[GitHub Releases](https://github.com/nercone-infra/openssl/releases)・コンテナイメージ・GitHub Action として配布するリポジトリです。nercone-infra の各コンポーネントは、ここでビルドした OpenSSL をリンクします。
+Pre-built OpenSSL binaries, built and published automatically via GitHub Actions.
 
-このリポジトリに OpenSSL のソースコードは含まれていません。新しい安定版がないかを6時間ごとに確認し、各プラットフォーム向けにビルドします。
+This repository does not contain OpenSSL source code. It periodically checks the [official OpenSSL releases](https://github.com/openssl/openssl/releases) for new stable versions, builds them for multiple platforms/architectures, and publishes the results as [GitHub Releases](https://github.com/nercone-infra/openssl/releases).
 
-## 対応プラットフォーム
+## Platforms
 
 - Linux (x86_64, AArch64)
 - macOS (x86_64, AArch64)
 - Windows (x86_64, AArch64)
 
-## リリースの内容
+Each release asset is named `openssl-<version>-<platform>-<arch>` and is provided as `.zip`, `.tar.gz`, `.tar.xz`, and `.7z`.
 
-- アーカイブ: `openssl-<version>-<platform>-<arch>`。形式は `.zip`、`.tar.gz`、`.tar.xz`、`.7z`。
-- チェックサム: 全アセット分の `SHA256SUMS`、`SHA384SUMS`、`SHA512SUMS`。
+Each release also includes `SHA256SUMS`, `SHA384SUMS`, and `SHA512SUMS` files with checksums for all assets in that release.
 
-## 使い方
+## How it works
 
-1. [Releases ページ](https://github.com/nercone-infra/openssl/releases)から、プラットフォームとアーキテクチャに合ったアーカイブをダウンロードします。
-2. 同じリリースの `SHA256SUMS`、`SHA384SUMS`、`SHA512SUMS` のいずれかで照合します(例: `sha256sum -c SHA256SUMS --ignore-missing`)。
-3. 展開し、`bin/` にある `openssl` を使います。
+The build workflow ([`.github/workflows/build.yml`](.github/workflows/build.yml)):
 
-### コンテナイメージ(Linux)
+1. Runs on a schedule (every 6 hours) or on manual dispatch.
+2. Determines which OpenSSL versions need to be built — the 10 most recent stable releases from `openssl/openssl` that don't already have a corresponding release in this repository, or a specific version if provided manually.
+3. Builds each version for every target platform/architecture using OpenSSL's own `Configure` + `make`/`nmake` build system (`no-tests`).
+4. Verifies the resulting `openssl` binary runs and reports its version.
+5. Packages the install output into `.zip`, `.tar.gz`, `.tar.xz`, and `.7z` archives.
+6. Publishes a GitHub Release tagged `openssl-<version>` with all platform archives attached.
 
-`ghcr.io/nercone-infra/openssl:<version>` は、あるリリースの Linux ビルド(`linux/amd64`、`linux/arm64`)を `/opt/openssl` に格納したイメージです。ファイルを保持するだけなので、ビルドステージとして使い、ダイジェストで固定してください。
+## Usage
 
-```dockerfile
-FROM ghcr.io/nercone-infra/openssl:4.1.0@sha256:<digest> AS openssl
-FROM debian:trixie-slim AS build
-COPY --from=openssl /opt/openssl /opt/openssl
-```
+Download the archive matching your platform and architecture from the [Releases page](https://github.com/nercone-infra/openssl/releases), extract it, and use the `openssl` binary under `bin/`.
 
-署名の確認: イメージは `image.yml` ワークフローが cosign(keyless)で署名しています。
+To verify an archive, download the corresponding `SHA256SUMS`, `SHA384SUMS`, or `SHA512SUMS` file from the same release and check it, e.g. `sha256sum -c SHA256SUMS --ignore-missing`.
 
-```sh
-cosign verify \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github\.com/nercone-infra/openssl/\.github/workflows/image\.yml@' \
-  ghcr.io/nercone-infra/openssl@<digest>
-```
+## Disclaimer
 
-アーカイブとの違い:
-- `/opt/openssl/lib` は常に存在します(x86_64 では `lib64` へのリンク)。
-- pkg-config ファイル(`lib/pkgconfig/*.pc`)のプレフィックスは `/opt/openssl` です。`PKG_CONFIG_PATH=/opt/openssl/lib/pkgconfig` をそのまま使えます。
-- アーカイブは、イメージに含める前にリリースの `SHA384SUMS` と照合されます([`image/prepare.sh`](image/prepare.sh))。
-
-公開の運用:
-- 各バージョンのイメージは一度だけ公開します。再公開するには、ワークフローの `replace` 入力を指定します。
-- 既存のリリースのイメージは、「Publish OpenSSL image」ワークフローを手動で実行して公開できます。
-- 他のリポジトリのビルドから pull できるよう、パッケージは公開(public)にしておく必要があります。
-
-### GitHub Actions
-
-[`setup/action.yml`](setup/action.yml) は Linux ビルドをランナーにインストールします(`SHA384SUMS` と照合)。`bin/` を `PATH` の先頭に、ライブラリを `LD_LIBRARY_PATH` に追加します。ビルド時の `OPENSSLDIR` と `MODULESDIR` はビルドマシン上のパスを指すため、インストールした設定ファイルとモジュールを `OPENSSL_CONF` と `OPENSSL_MODULES` で指定します。
-
-```yaml
-- id: openssl
-  uses: nercone-infra/openssl/setup@main
-  with:
-    version: 4.1.0
-- run: cargo build
-  env:
-    OPENSSL_DIR: ${{ steps.openssl.outputs.prefix }}
-    OPENSSL_LIB_DIR: ${{ steps.openssl.outputs.libdir }}
-```
-
-## 仕組み
-
-ビルドワークフロー([`.github/workflows/build.yml`](.github/workflows/build.yml))の流れ:
-
-1. スケジュール(6時間ごと)または手動実行で起動します。
-2. ビルドするバージョンを決めます。
-   - 自動: `openssl/openssl` の安定版リリースのうち最新の10件で、このリポジトリに対応するリリースがまだないもの。
-   - 手動: 指定したバージョン。
-3. ソースの tarball を取得し、OpenSSL の PGP 署名を検証します(署名者は固定したフィンガープリントに限る)。
-4. OpenSSL 自身のビルドシステム(`Configure` + `make`/`nmake`、`no-tests`)で、全プラットフォーム/アーキテクチャ向けにビルドします。
-5. `openssl` が実行でき、バージョンを出力することを確認します。
-6. インストール結果を `.zip`、`.tar.gz`、`.tar.xz`、`.7z` にまとめます。
-7. 全アーカイブとチェックサムを添付し、`openssl-<version>` タグの GitHub Release を公開します。複数のバージョンは古い順に公開するため、最も新しいバージョンが Latest になります。
-8. Linux ビルドをコンテナイメージとして公開します([`.github/workflows/image.yml`](.github/workflows/image.yml))。
-
-## 免責事項
-
-バイナリは、改変していない OpenSSL のソースリリースから、ワークフローファイルに記載したオプションでそのままビルドしています。
-いかなる保証もありません。特にセキュリティが重要な用途では、利用前にバイナリが用途に適しているかを確認してください。
+Binaries are built directly from unmodified OpenSSL source releases using the options shown in the workflow file.
+No warranty is provided; verify binaries are suitable for your use case before relying on them, especially in security-sensitive contexts.

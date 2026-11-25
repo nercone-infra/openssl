@@ -1,7 +1,3 @@
-# OpenSSL の新しい安定版を Linux・macOS・Windows(x86_64、AArch64)向けにビルドし、
-# GitHub Release として公開する。続けて image.yml で Linux ビルドのイメージを公開する。
-#   - スケジュール実行: openssl/openssl の安定版のうち最新の10件から、まだリリースがないものをビルドする。
-#   - 手動実行: version に指定したバージョンをビルドする。
 name: Build and Release OpenSSL
 
 on:
@@ -96,7 +92,7 @@ jobs:
       OPENSSL_VERSION: ${{ matrix.version }}
       OPENSSL_SIGNERS: B146647E45A7B33947AB226B2A2C87D161692D40 BA5473A2B0587B07FB27CF2D216094DFD0CB81EF EFC0A467D613CB83C7ED6D30D894E2CE8B3D79F5
     steps:
-      - name: Download source, signature and public keys
+      - name: Download OpenSSL
         run: |
           set -euo pipefail
           URL="https://github.com/openssl/openssl/releases/download/openssl-${OPENSSL_VERSION}"
@@ -104,8 +100,7 @@ jobs:
           curl -fL -o "openssl-${OPENSSL_VERSION}.tar.gz.asc" "${URL}/openssl-${OPENSSL_VERSION}.tar.gz.asc"
           curl -fL -o pubkeys.asc "https://openssl-library.org/source/pubkeys.asc"
 
-      # pubkeys.asc の鍵で署名を検証し、さらに署名した鍵が OPENSSL_SIGNERS のいずれかであることを確認する。
-      - name: Verify source signature
+      - name: Verify OpenSSL
         run: |
           set -euo pipefail
           GNUPGHOME=$(mktemp -d)
@@ -124,7 +119,7 @@ jobs:
           echo "Verified: OpenSSL ${OPENSSL_VERSION} signed by ${SIGNER}"
 
       - name: Upload source
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: source-${{ matrix.version }}
           path: openssl-${{ matrix.version }}.tar.gz
@@ -183,22 +178,22 @@ jobs:
       DIST_NAME: openssl-${{ matrix.version }}-${{ matrix.target.platform }}-${{ matrix.target.arch }}
 
     steps:
-      - name: Set up MSVC (Windows)
+      - name: Setup MSVC (Windows)
         if: matrix.target.platform == 'windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
         with:
           arch: ${{ matrix.target.msvc_arch }}
 
-      - name: Set up NASM (Windows x86_64)
+      - name: Setup NASM (Windows x86_64)
         if: matrix.target.id == 'windows-x86_64'
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
 
-      - name: Download verified source
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - name: Download OpenSSL
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: source-${{ matrix.version }}
 
-      - name: Extract source (Linux/macOS)
+      - name: Extract OpenSSL (Linux/macOS)
         if: matrix.target.platform != 'windows'
         shell: bash
         run: |
@@ -206,7 +201,7 @@ jobs:
           mkdir src
           tar -xzf "openssl-${OPENSSL_VERSION}.tar.gz" -C src --strip-components=1
 
-      - name: Extract source (Windows)
+      - name: Extract OpenSSL (Windows)
         if: matrix.target.platform == 'windows'
         shell: pwsh
         run: |
@@ -257,7 +252,7 @@ jobs:
           nmake install_sw install_ssldirs
           if ($LASTEXITCODE -ne 0) { throw "nmake install_sw failed" }
 
-      - name: Run openssl version (Linux/macOS)
+      - name: Check (Linux/macOS)
         if: matrix.target.platform != 'windows'
         shell: bash
         run: |
@@ -267,7 +262,7 @@ jobs:
           export DYLD_LIBRARY_PATH="${INSTALL_DIR}/lib64:${INSTALL_DIR}/lib:${DYLD_LIBRARY_PATH:-}"
           "${INSTALL_DIR}/bin/openssl" version
 
-      - name: Run openssl version (Windows)
+      - name: Check (Windows)
         if: matrix.target.platform == 'windows'
         shell: pwsh
         run: |
@@ -308,15 +303,13 @@ jobs:
           7z a -t7z "dist/$name.7z" "$name" | Out-Null
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: openssl-${{ matrix.version }}-${{ matrix.target.id }}
           path: dist/*
           retention-days: 1
           if-no-files-found: error
 
-  # 古いバージョンから1つずつ作成する。最後に作成したリリースが GitHub の Latest になるため、
-  # 一度に複数のバージョンを公開しても、最も新しいバージョンが Latest になる。
   release:
     needs: [check-version, build]
     if: needs.check-version.outputs.should_build == 'true'
@@ -330,7 +323,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Download artifacts for this version
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: openssl-${{ matrix.version }}-*
           path: dist
@@ -349,7 +342,7 @@ jobs:
         run: ls -la dist
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: openssl-${{ matrix.version }}
           name: OpenSSL ${{ matrix.version }}
@@ -368,18 +361,3 @@ jobs:
             *Built automatically using GitHub Actions. The workflow source code is available [here](https://github.com/nercone-infra/openssl/blob/main/.github/workflows/build.yml).*
           files: dist/*
           fail_on_unmatched_files: true
-
-  image:
-    needs: [check-version, release]
-    if: needs.check-version.outputs.should_build == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        version: ${{ fromJson(needs.check-version.outputs.versions_asc) }}
-    permissions:
-      contents: read
-      packages: write
-      id-token: write
-    uses: ./.github/workflows/image.yml
-    with:
-      version: ${{ matrix.version }}
